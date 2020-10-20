@@ -1,0 +1,28 @@
+// LaunchCode: fooAn
+
+enum Option {
+  Some(i32),
+  None
+}
+
+#[export]
+fn foo(A: &mut [i32], n: i32) {
+  let buffer = alloc_cpu(n as i64 * sizeof[Option]());
+  let B = bitcast[&mut[Option]](buffer.data);
+
+  for i in range(0, n) {
+    if A(i) != 0 {
+      B(i) = Option::Some(A(i));
+    } else {
+      B(i) = Option::None;
+    }
+  }
+
+  let asdf = 42;
+
+  for i in loop(n) {
+    A(i) = match B(i) { Option::Some(t1) => { t1 }, _ => asdf };
+  }
+
+  0
+}
