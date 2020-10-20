@@ -238,8 +238,61 @@ class HostClangToolchain(Toolchain):
 
 
 
+# clang + artic toolchain for the host target
+class HostArticClangToolchain(Toolchain):
+    runtime_dir = os.getenv("ANYDSL_RUNTIME", "../../../runtime")
 
-# rv+clang toolchain with nc++ for kernel compilation
+    artic_includes = [runtime_dir + "/src/runtime.impala",
+            runtime_dir + "/platforms/intrinsics.impala",
+            runtime_dir + "/platforms/intrinsics_rv.impala",
+            runtime_dir + "/platforms/intrinsics_cpu.impala",
+            runtime_dir + "/platforms/intrinsics_thorin.impala"]
+
+    def __init__(self):
+      self.clang = LLVMTools("-L " + HostArticClangToolchain.runtime_dir + "/build/lib  -lruntime -mavx -march=native -Iinclude -Wno-unused-command-line-argument")
+
+
+    def buildOuterLoopTester(self, testCase, profileMode):
+      prefix = "loopprofile" if profileMode else "loopverify"
+
+      scalarLL = testCase.getFilename('scalarLL')
+      vectorizedLL =  testCase.getFilename('loopLL')
+      logPrefix = testCase.getFilename('loopLogPrefix') + ".rvTool"
+      scalarName = "foo"
+      #ret = rvToolOuterLoop(scalarLL, vectorizedLL, scalarName, testCase.options, logPrefix)
+      #if 0 != ret: raise TestFailure(rvToolReason, logPrefix)
+
+      optScalarLL = scalarLL[:-2] + "opt.ll"
+      ret = self.clang.optimizeIR(optScalarLL, scalarLL, "")
+      if 0 != ret: raise TestFailure("optimizeIR failed", None)
+
+      launcherCpp, launcherCXXFlags = testCase.requestLauncher(prefix, profileMode)
+
+      caseName = primaryName(testCase.srcFile)
+
+      # build launcher binaries
+      vecLauncherBin = "./build/" + prefix + "_" + caseName + ".rv.bin"
+      ok = self.clang.compileCPP(vecLauncherBin, [vectorizedLL, launcherCpp], launcherCXXFlags) # clangLine + " " + testBC + " " + launcherLL + " -o " + launcherBin)
+      if not ok:
+          raise TestFailure("compileCPP for vectorizedLL+launcher", None)
+
+      scaLauncherBin = "./build/" + prefix + "_" + caseName + ".scalar.bin"
+      ok = self.clang.compileCPP(scaLauncherBin, [scalarLL, launcherCpp], launcherCXXFlags) # clangLine + " " + testBC + " " + launcherLL + " -o " + launcherBin)
+      if not ok:
+          raise TestFailure("compileCPP for scalarLL+launcher", None)
+
+      # create runner
+      return lambda: runOuterLoopTester(scaLauncherBin, vecLauncherBin, profileMode)
+
+
+    def buildTestRunner(self, testCase, profileMode):
+      scalarLL = testCase.getFilename('scalarLL')[:-3]
+      vectorLL = testCase.getFilename('loopLL')[:-3]
+      logPrefix = testCase.getFilename('loopLogPrefix') + ".artic"
+      shellCmd("artic " + testCase.srcFile + " launcher/cpu_scalar.impala " + " ".join(HostArticClangToolchain.artic_includes) + " --log-level info --emit-llvm -o " + scalarLL, logPrefix=logPrefix + ".scalar");
+      shellCmd("artic " + testCase.srcFile + " launcher/cpu_vector.impala " + " ".join(HostArticClangToolchain.artic_includes) + " --log-level info --emit-llvm -o " + vectorLL, logPrefix=logPrefix + ".vector");
+      return self.buildOuterLoopTester(testCase, profileMode)
+
 
 
 ################## TOOL CHAIN SELECTION #################
@@ -247,12 +300,15 @@ def printToolChains():
   text = """\
 Supported toolchains (default is ve):
  clang           rvTool+Clang tool chain for the host machine (-march=native).
+ artic           Artic+Clang tool chain for the host machine (-march=native).
 """
   print(text)
 
 def selectToolChain(toolChainName):
   if toolChainName == "clang":
     return HostClangToolchain()
+  if toolChainName == "artic":
+    return HostArticClangToolchain()
   else:
     raise Unsupported("Invalid toolchain: {}".format(toolChainName))
 
@@ -278,8 +334,9 @@ Options:
  -p               run in profile mode.
 
 Environment variables:
- RVT_DEBUG=1      dump all shell commands before they are run.
- NUM_SAMPLES=<n>  take median of <n> samples when in profile mode.
+ RVT_DEBUG=1        dump all shell commands before they are run.
+ NUM_SAMPLES=<n>    take median of <n> samples when in profile mode.
+ ANYDSL_RUNTIME     The runtime directory used by the artic toolchain
 
 """
   print(text)

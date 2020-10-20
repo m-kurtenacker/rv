@@ -1,0 +1,41 @@
+// LaunchCode: fooAn0
+
+enum Option[T] {
+  Some(T),
+  None
+}
+
+struct Pair {
+  a: i32,
+  b: i32
+}
+
+#[export]
+fn foo(A : &mut [i32], n : i32) -> i32 {
+  let buffer = alloc_cpu(n as i64 * sizeof[Option[Pair]]());
+  let B = bitcast[&mut[Option[Pair]]](buffer.data);
+  let mut p = Pair{a = 99, b = 99};
+  let p2 = Pair{a = 42, b = 42};
+
+  for i in range(0, n - 1) {
+    if A(i) != 0 {
+      B(i) = Option[Pair]::Some(Pair{a = A(i), b = A(i + 1)});
+    } else {
+      B(i) = Option[Pair]::None;
+    }
+  }
+  B(n - 1) = Option[Pair]::None;
+
+  for i in loop(n) {
+    match(B(i)) {
+      Option[Pair]::Some(newp) => {
+        p = p2;
+      },
+      _ => {}
+    }
+  }
+
+  A(0) = p.a;
+  A(1) = p.b;
+  0
+}
