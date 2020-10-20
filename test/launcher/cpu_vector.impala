@@ -1,0 +1,15 @@
+fn @round_down(n: i32, d: i32) -> i32 {
+  (n / d) * d
+}
+
+fn @loop(body: fn(i32) -> ()) = @|n: i32| 
+{
+  let vector_width = 8;
+  let n_vec = round_down(n, vector_width);
+  for i in range_step(0, n_vec, vector_width) {
+    vectorize(vector_width, |j| @body(i + j))
+  }
+  for i in range(n_vec, n) {
+    @body(i)
+  }
+};

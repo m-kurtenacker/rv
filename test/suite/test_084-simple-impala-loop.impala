@@ -1,0 +1,8 @@
+// LaunchCode: fooAn
+#[export]
+fn foo(A : &mut [i32], n : i32) -> i32 {
+  for i in loop(n) {
+    A(i) = i;
+  }
+  A(0)
+}
