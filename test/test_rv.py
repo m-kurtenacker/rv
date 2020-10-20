@@ -53,7 +53,7 @@ class TestCase:
     self.options = {}
 
   def parseOptions(self):
-    with open("suite/" + self.baseName, 'r') as f:
+    with open(self.srcFile, 'r') as f:
       srcOptions = f.readline().strip("//").strip("\n").strip()
     sigInfo = srcOptions.split(",")
     self.options['launchCode'] = None
