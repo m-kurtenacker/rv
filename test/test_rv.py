@@ -416,6 +416,7 @@ printRule()
 
 # run stuff
 
+error = False
 
 for pattern in patterns:
   tests = [testCase for testCase in glob(pattern)]
@@ -437,10 +438,12 @@ for pattern in patterns:
       runner = toolchain.buildTestRunner(test, profileMode)
     except TestFailure as err:
       print("ERROR: {}".format(err))
+      error = True
       # skip to next test
       continue
     except Unsupported as err:
       print("({})".format(err))
+      error = True
       continue
 
     # run the test
@@ -450,13 +453,18 @@ for pattern in patterns:
         success = not (rvTime is None or defTime is None)
         print("{:5.3f}".format(float(defTime) / rvTime) if success else "failed!")
         results.append([test.baseName, "{:5.3f}".format(defTime / rvTime) if success else "0"])
+        if not success:
+            error = True
 
       else:
         success = runner()
         print("passed" if success else "failed! <-")
+        if not success:
+            error = True
 
     except TestFailure as testFail:
       print("failed! {}".format(testFail))
+      error = True
 
 # flush out results numbers
 if profileMode:
@@ -466,3 +474,6 @@ if profileMode:
 
 # Goodbye
 printRule()
+
+if error:
+    sys.exit(1);
