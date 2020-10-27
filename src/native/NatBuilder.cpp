@@ -1207,7 +1207,7 @@ NatBuilder::createVectorMaskSummary(Type & indexTy, Value * vecVal, IRBuilder<> 
       }
 
       // AVX-specific code path
-      if (config.useSSE || config.useAVX || config.useAVX2 || config.useAVX512) {
+      if ((config.useSSE || config.useAVX || config.useAVX2 || config.useAVX512) && (vecWidth == 2 || vecWidth == 4 || vecWidth == 8)) {
       // non-uniform arg
         uint32_t bits = indexTy.getScalarSizeInBits();
         Intrinsic::ID id;
@@ -1215,8 +1215,7 @@ NatBuilder::createVectorMaskSummary(Type & indexTy, Value * vecVal, IRBuilder<> 
         case 2: id = Intrinsic::x86_sse2_movmsk_pd; bits = 64; break;
         case 4: id = Intrinsic::x86_sse_movmsk_ps; break;
         case 8: id = Intrinsic::x86_avx_movmsk_ps_256; break;
-        default: abort();
-          fail("Unsupported vector width in ballot !");
+        default: fail("Unsupported vector width in ballot !"); abort();
         }
 
         auto * extVal = builder.CreateSExt(vecVal, FixedVectorType::get(builder.getIntNTy(bits), vecWidth), "rv_ballot");
@@ -1271,8 +1270,6 @@ void
 NatBuilder::vectorizeBallotCall(CallInst *rvCall) {
   ++numRVIntrinsics;
 
-  auto vecWidth = vecInfo.getVectorWidth();
-  assert((vecWidth == 4 || vecWidth == 8) && "rv_ballot only supports SSE and AVX instruction sets");
   assert(rvCall->getNumArgOperands() == 1 && "expected 1 argument for rv_ballot(cond)");
 
   Value *condArg = rvCall->getArgOperand(0);
@@ -1287,54 +1284,68 @@ void
 NatBuilder::vectorizeIndexCall(CallInst & rvCall) {
   ++numRVIntrinsics;
 
-// avx512vl - expand based implementation
-  if (config.useAVX512) {
-    auto vecWidth = vecInfo.getVectorWidth();
-    assert(vecWidth == 4 || vecWidth == 8);
+  auto vecWidth = vecInfo.getVectorWidth();
+  assert(rvCall.getNumArgOperands() == 1 && "expected 1 argument for rv_index(mask)");
+  Value *condArg = rvCall.getArgOperand(0);
 
-    Intrinsic::ID id = Intrinsic::x86_avx512_mask_expand;
-
-    assert(rvCall.getNumArgOperands() == 1 && "expected 1 argument for rv_index(mask)");
-
-    Value *condArg = rvCall.getArgOperand(0);
-
-    auto * intLaneTy = IntegerType::getIntNTy(rvCall.getContext(), 512 / vecWidth);
-    bool argUniform = hasUniformPredicate(*rvCall.getParent()) && vecInfo.getVectorShape(*condArg).isUniform();
+  auto * intLaneTy = IntegerType::getIntNTy(rvCall.getContext(), 512 / vecWidth);
+  bool argUniform = hasUniformPredicate(*rvCall.getParent()) && vecInfo.getVectorShape(*condArg).isUniform();
 
 // uniform arg
-    if (argUniform) {
-      mapScalarValue(&rvCall, createContiguousVector(vecWidth, intLaneTy, 0, 1));
-      return;
-    }
+  if (argUniform) {
+    mapScalarValue(&rvCall, createContiguousVector(vecWidth, intLaneTy, 0, 1)); // <0, 1, 2, ...>
+    return;
+  }
 
-    auto * maskVec = maskInactiveLanes(requestVectorValue(condArg), rvCall.getParent(), false);
-    auto * contVec = createContiguousVector(vecWidth, intLaneTy, 0, 1);
+// avx512vl - expand based implementation
+  if (config.useAVX512 && (vecWidth == 4 || vecWidth == 8)) {
+    Intrinsic::ID id = Intrinsic::x86_avx512_mask_expand;
 
+    auto * maskVec = maskInactiveLanes(requestVectorValue(condArg), rvCall.getParent(), false); // <1, 1, 0, 0, 1, 0, ...>, zeroes on inactive lanes.
+    auto * contVec = createContiguousVector(vecWidth, intLaneTy, 0, 1); // <0, 1, 2, ...>
 
     auto * fpLaneTy = Type::getDoubleTy(rvCall.getContext());
     auto * fpVecTy = FixedVectorType::get(fpLaneTy, vecWidth);
     auto * intVecTy = FixedVectorType::get(intLaneTy, vecWidth);
 
-    auto * fpValVec = builder.CreateBitCast(contVec, fpVecTy);
+    auto * fpValVec = builder.CreateBitCast(contVec, fpVecTy); // <0.0, 1.0, 2.0, ...>
 
-    auto * expandDecl = Intrinsic::getDeclaration(rvCall.getParent()->getParent()->getParent(), id, {});
+    auto * expandDecl = Intrinsic::getDeclaration(rvCall.getParent()->getParent()->getParent(), id, {}); // mask_expand method
 
 //flatten mask (<W x i1> --> <iW>)
     auto * flatMaskTy = Type::getIntNTy(rvCall.getContext(), vecWidth);
-    auto * flatMask = builder.CreateBitCast(maskVec, flatMaskTy, "flatmask");
+    auto * flatMask = builder.CreateBitCast(maskVec, flatMaskTy, "flatmask"); // technical, similar to rv_ballot.
 
 // call expand
     auto * expandedVec = builder.CreateCall(expandDecl, {fpValVec, Constant::getNullValue(fpVecTy), flatMask}, "psum_bits");
 
-    auto * indexVec = builder.CreateBitCast(expandedVec, intVecTy, "bc_ivec");
+    auto * indexVec = builder.CreateBitCast(expandedVec, intVecTy, "bc_ivec"); //<0, 1, ?, ?, 2, ?, ...>, Rising index for masked-in values.
 
     mapVectorValue(&rvCall, indexVec);
     return;
-  }
-
+  } else {
 // generic implementation
-  assert(config.useAVX512 && "TODO generic implementation (avx512vl only)");
-  abort(); // "TODO generic implementation (avx512vl only)"
+    auto * maskVec = maskInactiveLanes(requestVectorValue(condArg), rvCall.getParent(), false); // <1, 1, 0, 0, 1, 0, ...>, zeroes on inactive lanes.
+
+    llvm::Value * CacheVal = ConstantInt::get(rvCall.getType(), 0);
+    auto * OneVal = ConstantInt::get(rvCall.getType(), 1);
+
+    auto replFunc =  [vecWidth,&CacheVal,OneVal,maskVec](IRBuilder<> & builder, size_t lane) -> Value* {
+      auto * OldVal = CacheVal;
+      if (lane < vecWidth - 1) {
+        auto * val = builder.CreateExtractElement(maskVec, ConstantInt::get(Type::getInt32Ty(builder.getContext()), lane));
+        auto * addValue = builder.CreateAdd(CacheVal, OneVal);
+        auto * NewVal = builder.CreateSelect(val, addValue, CacheVal);
+        CacheVal = NewVal;
+      }
+      return OldVal;
+    };
+
+    ValVec resVec = scalarizeCascaded(*rvCall.getParent(), rvCall, true, replFunc);
+    return;
+  }
+  //assert(config.useAVX512 && "TODO generic implementation (avx512vl only)");
+  //abort(); // "TODO generic implementation (avx512vl only)"
 }
 
 void
