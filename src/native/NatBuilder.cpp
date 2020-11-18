@@ -457,6 +457,7 @@ void NatBuilder::vectorize(BasicBlock *const bb, BasicBlock *vecBlock) {
         case RVIntrinsic::Align: vectorizeAlignCall(call); break;
         case RVIntrinsic::LaneID: vectorizeLaneIDCall(call); break;
         case RVIntrinsic::NumLanes: vectorizeNumLanesCall(call); break;
+        case RVIntrinsic::AssertUniform: vectorizeAssertUniformCall(call); break;
         default: {
           if (config.enableInterleaved) addLazyInstruction(inst);
           else {
@@ -1020,6 +1021,33 @@ void NatBuilder::vectorizeReductionCall(CallInst *rvCall, bool isRv_all) {
 #endif
 
   mapScalarValue(rvCall, reduction);
+
+  ++numRVIntrinsics;
+}
+
+void NatBuilder::vectorizeAssertUniformCall(CallInst *rvCall) {
+  assert(rvCall->getNumArgOperands() == 1 && "expected only 1 argument for rv_assert_uniform");
+
+  Value *predicate = rvCall->getArgOperand(0);
+  const VectorShape &shape = getVectorShape(*predicate);
+  //assert(shape.isUniform() && "assert_uniform requires the argument to actually be uniform");
+  if (shape.isUniform()) {
+    Value *vecPredicate = requestScalarValue(predicate);
+    mapScalarValue(rvCall, vecPredicate);
+  } else {
+    const llvm::DebugLoc &instPos = rvCall->getDebugLoc();
+    if (bool(instPos)) {
+        errs() << "Warning: uniform argument expected here:\n";
+        instPos.dump();
+        errs() << "\n";
+    } else {
+        errs() << "Warning: uniform argument expected.\n";
+        errs() << "The location could not be determined, debugging locations are required!\n";
+    }
+
+    Value *vecPredicate = maskInactiveLanes(requestVectorValue(predicate), rvCall->getParent(), false);
+    mapVectorValue(rvCall, vecPredicate);
+  }
 
   ++numRVIntrinsics;
 }

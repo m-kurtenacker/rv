@@ -127,6 +127,18 @@ GetIntrinsicMapping(Function & func, RVIntrinsic rvIntrin) {
       ));
     } break;
 
+    case RVIntrinsic::AssertUniform: {
+      return (VectorMapping(
+        &func,
+        &func,
+        0, // no specific vector width
+        -1, //
+        VectorShape::uni(),
+        {VectorShape::uni()},
+        CallPredicateMode::SafeWithoutPredicate
+      ));
+    } break;
+
     case RVIntrinsic::Extract: {
       return (VectorMapping(
         &func,

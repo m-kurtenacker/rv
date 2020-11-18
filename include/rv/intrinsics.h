@@ -44,6 +44,9 @@ namespace rv {
     VecStore = 103, // rv_store(V)
     Shuffle = 104, // rv_shuffle(V, S) returns the varying value V shifted by constant S
     Align = 105, // rv_align(V, C) informs RV that V has the alignment constant C
+
+  // debugging intrinsics, these will not have an effect on program execution in the end.
+    AssertUniform = 106, // rv_assert_uniform(V) issues a warning if V is not uniform.
   };
 
   VectorMapping GetIntrinsicMapping(llvm::Function&, RVIntrinsic rvIntrin);
